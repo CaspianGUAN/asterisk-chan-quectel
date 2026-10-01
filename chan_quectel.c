@@ -1433,8 +1433,6 @@ static const char * pvt_state_base(const struct pvt * pvt)
 		state = "Not connected";
 	else if(!pvt->initialized)
 		state = "Not initialized";
-	else if(pvt->eps_registered && !pvt->gsm_registered)
-		state = "LTE registered";
 	else if(!pvt->gsm_registered && !pvt->eps_registered)
 		state = "GSM not registered";
 	return state;
@@ -1465,6 +1463,8 @@ EXPORT_DEF const char* pvt_str_state(const struct pvt* pvt)
 			state = "Held";
 		else if(pvt->outgoing_sms || pvt->incoming_sms_index != -1U)
 			state = "SMS";
+		else if(pvt->eps_registered && !pvt->gsm_registered)
+			state = "LTE registered";
 		else
 			state = "Free";
 	}
@@ -1509,7 +1509,8 @@ EXPORT_DEF struct ast_str* pvt_str_state_ex(const struct pvt* pvt)
 
 		if(ast_str_strlen(buf) == 0)
 		{
-			ast_str_append (&buf, 0, "%s", "Free");
+			ast_str_append (&buf, 0, "%s",
+				(pvt->eps_registered && !pvt->gsm_registered) ? "LTE registered" : "Free");
 		}
 	}
 
