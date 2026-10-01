@@ -215,6 +215,14 @@ static int at_response_ok (struct pvt* pvt, at_res_t res)
 				ast_debug (1, "[%s] registration query sent\n", PVT_ID(pvt));
 				break;
 
+			case CMD_AT_CEREG_INIT:
+				ast_debug (1, "[%s] EPS registration info enabled\n", PVT_ID(pvt));
+				break;
+
+			case CMD_AT_CEREG:
+				ast_debug (1, "[%s] EPS registration query sent\n", PVT_ID(pvt));
+				break;
+
 			case CMD_AT_CNUM:
 				ast_debug (1, "[%s] Subscriber phone number query successed\n", PVT_ID(pvt));
 				break;
@@ -483,6 +491,14 @@ static int at_response_error (struct pvt* pvt, at_res_t res)
 
 			case CMD_AT_CREG:
 				ast_debug (1, "[%s] Error getting registration info\n", PVT_ID(pvt));
+				break;
+
+			case CMD_AT_CEREG_INIT:
+				ast_debug (1, "[%s] Error enabling EPS registration info\n", PVT_ID(pvt));
+				break;
+
+			case CMD_AT_CEREG:
+				ast_debug (1, "[%s] Error getting EPS registration info\n", PVT_ID(pvt));
 				break;
 
 			case CMD_AT_CVOICE:
@@ -1869,11 +1885,12 @@ static int at_response_cops (struct pvt* pvt, char* str)
  * \retval -1 error
  */
 
-static int at_response_creg (struct pvt* pvt, char* str, size_t len)
+static int at_response_creg (struct pvt* pvt, char* str, size_t len, int eps)
 {
 	int	d;
 	char*	lac;
 	char*	ci;
+	int	was = pvt->gsm_registered;
 
 	if (at_enqueue_cops(&pvt->sys_chan))
 	{
@@ -1882,11 +1899,16 @@ static int at_response_creg (struct pvt* pvt, char* str, size_t len)
 
 	if (at_parse_creg (str, len, &d, &pvt->gsm_reg_status, &lac, &ci))
 	{
-		ast_verb (1, "[%s] Error parsing CREG: '%.*s'\n", PVT_ID(pvt), (int) len, str);
+		ast_verb (1, "[%s] Error parsing %s: '%.*s'\n", PVT_ID(pvt), eps ? "CEREG" : "CREG", (int) len, str);
 		return 0;
 	}
 
-	if (d)
+	if (eps)
+		pvt->eps_registered = d ? 1 : 0;
+
+	/* CS registration denied is normal on LTE-only/VoLTE networks.
+	 * Keep the device callable while EPS registration is home or roaming. */
+	if (d || pvt->eps_registered)
 	{
 //#ifdef ISSUE_CCWA_STATUS_CHECK
 		/* only if gsm_registered 0 -> 1 ? */
@@ -1894,12 +1916,14 @@ static int at_response_creg (struct pvt* pvt, char* str, size_t len)
 			at_enqueue_set_ccwa(&pvt->sys_chan, CONF_SHARED(pvt, callwaiting));
 //#endif
 		pvt->gsm_registered = 1;
-		manager_event_device_status(PVT_ID(pvt), "Register");
+		if (!was)
+			manager_event_device_status(PVT_ID(pvt), "Register");
 	}
 	else
 	{
 		pvt->gsm_registered = 0;
-		manager_event_device_status(PVT_ID(pvt), "Unregister");
+		if (was)
+			manager_event_device_status(PVT_ID(pvt), "Unregister");
 	}
 
 	if (lac)
@@ -2146,9 +2170,14 @@ int at_response (struct pvt* pvt, const struct iovec iov[2], int iovcnt, at_res_
 			case RES_CONN:
 				return at_response_conn (pvt, str);
 
+			case RES_CEREG:
+				/* LTE/EPS registration. Same format as CREG. */
+				at_response_creg (pvt, str, len, 1);
+				return 0;
+
 			case RES_CREG:
 				/* An error here is not fatal. Just keep going. */
-				at_response_creg (pvt, str, len);
+				at_response_creg (pvt, str, len, 0);
 				return 0;
 
 			case RES_COPS:
