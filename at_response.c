@@ -1888,42 +1888,43 @@ static int at_response_cops (struct pvt* pvt, char* str)
 static int at_response_creg (struct pvt* pvt, char* str, size_t len, int eps)
 {
 	int	d;
+	int	status;
 	char*	lac;
 	char*	ci;
-	int	was = pvt->gsm_registered;
+	int	was_callable = pvt->gsm_registered || pvt->eps_registered;
 
-	if (at_enqueue_cops(&pvt->sys_chan))
-	{
-		ast_log (LOG_ERROR, "[%s] Error sending query for provider name\n", PVT_ID(pvt));
-	}
-
-	if (at_parse_creg (str, len, &d, &pvt->gsm_reg_status, &lac, &ci))
+	if (at_parse_creg (str, len, &d, &status, &lac, &ci))
 	{
 		ast_verb (1, "[%s] Error parsing %s: '%.*s'\n", PVT_ID(pvt), eps ? "CEREG" : "CREG", (int) len, str);
 		return 0;
 	}
 
 	if (eps)
-		pvt->eps_registered = d ? 1 : 0;
-
-	/* CS registration denied is normal on LTE-only/VoLTE networks.
-	 * Keep the device callable while EPS registration is home or roaming. */
-	if (d || pvt->eps_registered)
 	{
-//#ifdef ISSUE_CCWA_STATUS_CHECK
-		/* only if gsm_registered 0 -> 1 ? */
-		if(!pvt->gsm_registered && CONF_SHARED(pvt, callwaiting) != CALL_WAITING_AUTO)
-			at_enqueue_set_ccwa(&pvt->sys_chan, CONF_SHARED(pvt, callwaiting));
-//#endif
-		pvt->gsm_registered = 1;
-		if (!was)
-			manager_event_device_status(PVT_ID(pvt), "Register");
+		pvt->eps_reg_status = status;
+		pvt->eps_registered = d ? 1 : 0;
 	}
 	else
 	{
-		pvt->gsm_registered = 0;
-		if (was)
-			manager_event_device_status(PVT_ID(pvt), "Unregister");
+		pvt->gsm_reg_status = status;
+		pvt->gsm_registered = d ? 1 : 0;
+	}
+
+	/* CS denial is normal on LTE-only/VoLTE. Either domain is enough to dial. */
+	if (pvt->gsm_registered || pvt->eps_registered)
+	{
+		if (!was_callable)
+		{
+			if (at_enqueue_cops(&pvt->sys_chan))
+				ast_log (LOG_ERROR, "[%s] Error sending query for provider name\n", PVT_ID(pvt));
+			if (CONF_SHARED(pvt, callwaiting) != CALL_WAITING_AUTO)
+				at_enqueue_set_ccwa(&pvt->sys_chan, CONF_SHARED(pvt, callwaiting));
+			manager_event_device_status(PVT_ID(pvt), "Register");
+		}
+	}
+	else if (was_callable)
+	{
+		manager_event_device_status(PVT_ID(pvt), "Unregister");
 	}
 
 	if (lac)
